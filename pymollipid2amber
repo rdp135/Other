@@ -1,0 +1,253 @@
+#!/usr/bin/env python
+# Robert Palmere, 2019
+# Script to add TER cards and adjust resid numbers for lipid simulations after solvating with packmol-memgen
+# or saving from PyMOL
+# ** Please note that this script will not work if the residues are not specified in the tuples below -
+# this can be fixed in the future by directly pulling available residues from AMBER directories
+
+
+try:
+    from Bio import PDB
+    from Bio.PDB import PDBParser
+    from Bio.PDB.PDBIO import Select
+    from Bio._py3k import basestring
+    from Bio.PDB.StructureBuilder import StructureBuilder
+    from Bio.Data.IUPACData import atom_weights
+except:
+    ImportError('pip install biopython - cannot find Bio.PDB')
+import sys
+sys.path.append('/Users/rdp135/Desktop/pymollipid2amber_testing/')
+try:
+    import xpdb
+except:
+    ImportError('Could not find xpdb.py - https://biopython.org/wiki/Reading_large_PDB_files')
+
+parser = PDB.PDBParser(PERMISSIVE=False, structure_builder=xpdb.SloppyStructureBuilder())
+io = xpdb.SloppyPDBIO()
+
+if len(sys.argv) == 3:
+    file = str(sys.argv[1])
+    output_file = str(sys.argv[2])
+else:
+    print('pymollipid2amber {input filename} {output filename}')
+    exit()
+original_structure = parser.get_structure('original', file) # Complete PDB after equilibration
+
+# PDB residues
+_ATOM_FORMAT_STRING = "%s%5i %-4s%c%3s %c%4i%c   %8.3f%8.3f%8.3f%s%6.2f      %4s%2s%2s\n"
+protein_residues = ('HYP', 'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'CYX', 'GLN', 'GLU', 'GLY', 'HID', 'HIE', 'HIP', 'ILE', 'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL', 'HIS') # Protein residue names taken from leaprc.protein.ff14SB
+lipid_residues = ('PA ', 'PS ', 'PC ', 'H2C', 'P2F', 'ST ', 'OL ')
+ion_residues = ('CA', 'Na+')
+water_residue = 'WAT'
+
+
+class Main:
+    def __init__(self):
+        self.structure = original_structure
+
+    def add_ter(self, file_name):
+        """adds TER cards in the appropriate place for Lipid17ff - ignores waters"""
+        input_file = open(file_name, 'r').readlines()
+        line_array = []
+        lines = input_file
+        c = 0  # Correction for loop
+        for n, each in enumerate(lines):
+            line_array.append(each)
+            # Lipids
+            for res in lipid_residues:
+                if res in each:
+                    lines[n] = lines[n].split()
+                    if lines[n][3] == lines[n - 1][3]:
+                        pass
+                    else:
+                        if lines[n][3] == 'PA' or lines[n][3] == 'ST':
+                            line_array.insert(n + c, 'TER   \n')
+                            c += 1
+                        elif lines[n - 1][3] == 'WAT':
+                            line_array.insert(n + c, 'TER   \n')
+                            c += 1
+                        else:
+                            pass
+            for res in ion_residues:
+                if res in each:
+                    lines[n] = lines[n].split()
+                    if lines[n][3] in protein_residues:
+                        pass
+                    else:
+                        if lines[n][3] == lines[n - 1][3]:
+                            line_array.insert(n + c, 'TER   \n')
+                            c += 1
+                        elif lines[n - 1] not in ion_residues:
+                            line_array.insert(n + c, 'TER   \n')
+                            c += 1
+                        else:
+                            pass
+            if water_residue in each:
+                lines[n] = lines[n].split()
+                if len(lines[n]) > 4:
+                    if lines[n][2] == 'O':
+                        line_array.insert(n + c, 'TER   \n')
+                        c += 1
+                    else:
+                        pass
+        with open(file_name, 'w') as fp:
+            fp.writelines(line_array)
+
+    def _get_atom_line(self, atom, hetfield, segid, atom_number, resname,
+                       resseq, icode, chain_id, charge="  "):
+        """Return an ATOM PDB string (PRIVATE)."""
+        if hetfield != " ":
+            record_type = "HETATM"
+        else:
+            record_type = "ATOM  "
+
+        if atom.element:
+            element = atom.element.strip().upper()
+            if element.capitalize() not in atom_weights:
+                raise ValueError("Unrecognised element %r" % atom.element)
+            element = element.rjust(2)
+        else:
+            element = "  "
+
+        name = atom.get_fullname().strip()
+
+        # Pad atom name if:
+        #     - smaller than 4 characters
+        # AND - is not C, N, O, S, H, F, P, ..., one letter elements
+        # AND - first character is NOT numeric (funky hydrogen naming rules)
+        if len(name) < 4 and name[:1].isalpha() and len(element.strip()) < 2:
+            name = " " + name
+
+        altloc = atom.get_altloc()
+        x, y, z = atom.get_coord()
+        bfactor = atom.get_bfactor()
+        occupancy = atom.get_occupancy()
+        try:
+            occupancy_str = "%6.2f" % occupancy
+        except TypeError:
+            if occupancy is None:
+                occupancy_str = " " * 6
+                import warnings
+                from Bio import BiopythonWarning
+                warnings.warn("Missing occupancy in atom %s written as blank" %
+                              repr(atom.get_full_id()), BiopythonWarning)
+            else:
+                raise TypeError("Invalid occupancy %r in atom %r"
+                                % (occupancy, atom.get_full_id()))
+
+        args = (record_type, atom_number, name, altloc, resname, chain_id,
+                resseq, icode, x, y, z, occupancy_str, bfactor, segid,
+                element, charge)
+        return _ATOM_FORMAT_STRING % args
+
+    def _get_atom_line_lipids(self, atom, hetfield, segid, atom_number, resname,
+                              resseq, icode, chain_id, charge="  "):
+        """return atom line for lipids (private)"""
+        if hetfield != " ":
+            record_type = "HETATM"
+        else:
+            record_type = "ATOM  "
+
+        name = atom.get_fullname().strip()
+        # if name in
+        altloc = atom.get_altloc()
+        x, y, z = atom.get_coord()
+        bfactor = atom.get_bfactor()
+        occupancy = atom.get_occupancy()
+        segid = "MEMB"
+        element = "  "
+        try:
+            occupancy_str = "%6.2f" % occupancy
+        except TypeError:
+            if occupancy is None:
+                occupancy_str = " " * 6
+                import warnings
+                from Bio import BiopythonWarning
+                warnings.warn("Missing occupancy in atom %s written as blank" %
+                              repr(atom.get_full_id()), BiopythonWarning)
+            else:
+                raise TypeError("Invalid occupancy %r in atom %r"
+                                % (occupancy, atom.get_full_id()))
+
+        lipid_args = (record_type, atom_number, name, altloc, resname, chain_id,
+                resseq, icode, x, y, z, occupancy_str, bfactor, segid,
+                element, charge)
+        return _ATOM_FORMAT_STRING % lipid_args
+
+    def membrane_save(self, file, select=Select(), write_end=True, preserve_atom_numbering=False):
+        """Save structure including membrane to a file."""
+        rescnt = 0
+        get_atom_line = self._get_atom_line
+        if isinstance(file, basestring):
+            fp = open(file, "w")
+            close_file = 1
+        else:
+            fp = file
+            close_file = 0
+        for model in self.structure.get_list():
+            if not select.accept_model(model):
+                continue
+            # necessary for ENDMDL
+            # do not write ENDMDL if no residues were written
+            # for this model
+            model_residues_written = 0
+            if not preserve_atom_numbering:
+                atom_number = 1
+            for chain in model.get_list():
+                if not select.accept_chain(chain):
+                    continue
+                chain_id = chain.get_id()
+                # necessary for TER
+                # do not write TER if no residues were written
+                # for this chain
+                chain_residues_written = 0
+                for count, residue in enumerate(chain.get_unpacked_list()):
+                    if not select.accept_residue(residue):
+                        continue
+                    hetfield, resseq, icode = residue.get_id()
+                    resname = residue.get_resname()
+                    segid = residue.get_segid()
+                    if resname in lipid_residues:
+                        if 'PA' in resname or 'ST' in resname:
+                            rescnt += 1
+                        for atom in residue.get_unpacked_list():
+                            if select.accept_atom(atom):
+                                chain_residues_written = 1
+                                model_residues_written = 1
+                                if preserve_atom_numbering:
+                                    atom_number = atom.get_serial_number()
+                                s = self._get_atom_line_lipids(atom, hetfield, segid, atom_number, resname,
+                                                          rescnt, icode, chain_id)
+                                fp.write(s)
+                                if not preserve_atom_numbering:
+                                    atom_number += 1
+                        else:
+                            pass
+                    else:
+                        for atom in residue.get_unpacked_list():
+                            if select.accept_atom(atom):
+                                chain_residues_written = 1
+                                model_residues_written = 1
+                                if preserve_atom_numbering:
+                                    atom_number = atom.get_serial_number()
+                                s = get_atom_line(atom, hetfield, segid, atom_number, resname,
+                                                  resseq, icode, chain_id)
+                                fp.write(s)
+                                if not preserve_atom_numbering:
+                                    atom_number += 1
+                if chain_residues_written:
+                    #fp.write("TER   %5i      %3s %c%4i%c                                                      \n"
+                    #         % (atom_number, resname, chain_id, resseq, icode))
+                    fp.write("TER   \n")
+        if write_end:
+            fp.write('END\n')
+        if close_file:
+            fp.close()
+
+if __name__ == '__main__':
+    x = Main()
+    print('\nSaving to Lipid17 format.\n')
+    x.membrane_save(output_file)
+    print('Adding TER cards.\n')
+    x.add_ter(output_file)
+    print('Done.')

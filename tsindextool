@@ -1,0 +1,206 @@
+#! /usr/bin/env python
+# Robert Palmere June 2018 - Updated 4/19/2019
+# Generates Text File containing tabulated information of Topspin data files
+
+# -- Imports
+import os
+import glob
+import sys
+import argparse
+
+try:
+    from tabulate import tabulate
+except ImportError:
+    raise ImportError('Missing tabulate module: $pip3 install tabulate or $python3 -m pip install tabulate')
+
+
+class Acquire:
+    def __init__(self):
+        self.total_dir_array = []
+        self.total_dir_count = []
+        self.cwd = os.getcwd()
+        self.total_dir = os.listdir(self.cwd)
+        self.parser = argparse.ArgumentParser()
+
+    def flags(self):
+        self.parser.add_argument("-s", "--sort", help="output will be sorted by Topspin file in numeric order",
+                                 action='store_true')
+        self.parser.add_argument("-ts", "--topspin", help="output will be sorted by Topspin file pulse program "
+                                                          "as they appear in the Topspin GUI buffer listing",
+                                 action='store_true')
+        _args = self.parser.parse_args()
+        return _args
+
+    @staticmethod
+    def set_path():
+        dir_path = os.path.dirname(os.path.realpath(__file__))
+        if 'dir_path' not in sys.path():
+            sys.path.append(dir_path)
+
+    @staticmethod
+    def is_number(x):
+        try:
+            float(x)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def pd_centered(datfr):
+        return datfr.style.set_table_styles([
+            {"selector": "th", "props": [("text-align", "center")]},
+            {"selector": "td", "props": [("text-align", "center")]}])
+
+    @staticmethod
+    def human_readable(nbytes):
+        suffixes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+        h = 0
+        while nbytes >= 1024 and h < len(suffixes)-1:
+            nbytes /= 1024.
+            h += 1
+        f = ('%.2f' % nbytes).rstrip('0').rstrip('.')
+        return '%s %s' % (f, suffixes[h])
+
+    def run_ts(self):
+        title_string = "{}/pdata/1/title"
+        pulse_string = "{}/pulseprogram"
+        acqu_string = "{}/acqu*s"
+        ser_string = "{}/ser"
+        pulse_progs = []
+        titles = []
+        dimensions = []
+        fid_sizes = []
+
+        for count, directory in enumerate(self.total_dir):
+            if self.is_number(directory):
+                self.total_dir_array.append(directory)
+                self.total_dir_count.append(count)
+
+        with open("fileindex.txt", "w") as file:
+            for i in self.total_dir:
+                if self.is_number(i):
+                    if os.path.exists(title_string.format(int(i))) and os.path.exists(pulse_string.format(i)):
+                        opened_title = open(title_string.format(int(i)), "r")
+                        line = opened_title.readlines()
+                        line_title = [x.strip() for x in line]
+                        title_join = ','.join(line_title)
+                        title = title_join.replace(",", " ")
+                        opened_title.close()
+                        opened_pp = open(pulse_string.format(int(i)), "r")
+                        pps = opened_pp.readline()
+                        pps = pps.split(" ")
+                        if len(pps) > 2:
+                            pps = str(pps[2])
+                            pps = pps.split("pp/")
+                            pps = pps[1]
+                            pps = pps[:-2]
+                        else:
+                            pps = str(pps[1])
+                            pps = pps.split("pp/")
+                            pps = pps[0]
+                            pps = pps[:-1]
+                        opened_pp.close()
+                        list_acqu = glob.glob(acqu_string.format(int(i)))
+                        num_aqs_int = int(len(list_acqu))
+                        if os.path.exists(ser_string.format(int(i))):
+                            serpath = os.path.join(self.cwd, ser_string.format(int(i)))
+                            sersize = os.path.getsize(serpath)
+                        else:
+                            sersize = 0
+                        fid_sizes.append(self.human_readable(sersize))
+                        pulse_progs.append(pps)
+                        titles.append(title)
+                        dimensions.append(num_aqs_int)
+                    else:
+                        print("Warning: ", title_string.format(i), " does not exist -- SKIPPED")
+                        fid_sizes.append(None)
+                        pulse_progs.append(None)
+                        titles.append("SKIPPED")
+                        dimensions.append(None)
+                        continue
+
+            table = []
+            for i in range(len(self.total_dir_array)):
+                df = [self.total_dir_array[i], pulse_progs[i], titles[i], dimensions[i], fid_sizes[i]]
+                table.append(df)
+            tb = tabulate(table, headers=["Topspin File #", "Pulse Program", "Title", "Dimension", "FID Size"], tablefmt="pipe", numalign='center')
+            file.write(tb)
+        os.system("open " + "fileindex.txt")
+
+    def run_sorted(self):
+        title_string = "{}/pdata/1/title"
+        pulse_string = "{}/pulseprogram"
+        acqu_string = "{}/acqu*s"
+        ser_string = "{}/ser"
+        pulse_progs = []
+        titles = []
+        dimensions = []
+        fid_sizes = []
+
+        for count, directory in enumerate(self.total_dir):
+            if self.is_number(directory):
+                self.total_dir_array.append(directory)
+                self.total_dir_count.append(count)
+
+        with open("fileindex.txt", "w") as file:
+            for i in self.total_dir:
+                if self.is_number(i):
+                    if os.path.exists(title_string.format(int(i))) and os.path.exists(pulse_string.format(i)):
+                        opened_title = open(title_string.format(int(i)), "r")
+                        line = opened_title.readlines()
+                        line_title = [x.strip() for x in line]
+                        title_join = ','.join(line_title)
+                        title = title_join.replace(",", " ")
+                        opened_title.close()
+                        opened_pp = open(pulse_string.format(int(i)), "r")
+                        pps = opened_pp.readline()
+                        pps = pps.split(" ")
+                        if len(pps) > 2:
+                            pps = str(pps[2])
+                            pps = pps.split("pp/")
+                            pps = pps[1]
+                            pps = pps[:-2]
+                        else:
+                            pps = str(pps[1])
+                            pps = pps.split("pp/")
+                            pps = pps[0]
+                            pps = pps[:-1]
+                        opened_pp.close()
+                        list_acqu = glob.glob(acqu_string.format(int(i)))
+                        num_aqs_int = int(len(list_acqu))
+                        if os.path.exists(ser_string.format(int(i))):
+                            serpath = os.path.join(self.cwd, ser_string.format(int(i)))
+                            sersize = os.path.getsize(serpath)
+                        else:
+                            sersize = 0
+                        fid_sizes.append(self.human_readable(sersize))
+                        pulse_progs.append(pps)
+                        titles.append(title)
+                        dimensions.append(num_aqs_int)
+                    else:
+                        print("Warning: ", title_string.format(i), " does not exist -- SKIPPED")
+                        fid_sizes.append(None)
+                        pulse_progs.append(None)
+                        titles.append("SKIPPED")
+                        dimensions.append(None)
+                        continue
+
+            table = []
+            for i in range(len(self.total_dir_array)):
+                df = [self.total_dir_array[i], pulse_progs[i], titles[i], dimensions[i], fid_sizes[i]]
+                table.append(df)
+                table = sorted(table, key=lambda x: float(x[0]))
+                tb = tabulate(table, headers=["Topspin File #", "Pulse Program", "Title", "Dimension", "FID Size"], tablefmt="pipe", numalign='center')
+            file.write(tb)
+        os.system("open " + "fileindex.txt")
+
+
+if __name__ == '__main__':
+    flag = Acquire().flags()
+    if flag.sort:
+        Acquire().run_sorted()
+    elif flag.topspin:
+        Acquire().run_ts()
+    else:
+        print("Please specify sorting option:")
+        os.system("%s --help" % (os.path.dirname(os.path.realpath(__file__))+"/tsindextool"))
